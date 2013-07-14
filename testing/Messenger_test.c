@@ -7,7 +7,7 @@
  * If it recieves a message from a friend it replies back.
  * 
  * 
- * This is how I compile it: gcc -O2 -Wall -o test ../core/Lossless_UDP.c ../core/network.c ../core/net_crypto.c ../core/DHT.c ../core/Messenger.c ../nacl/build/Linux/lib/amd64/* Messenger_test.c
+ * This is how I compile it: gcc -O2 -Wall -D VANILLA_NACL -o test ../core/Lossless_UDP.c ../core/network.c ../core/net_crypto.c ../core/Messenger.c ../core/DHT.c ../nacl/build/${HOSTNAME%.*}/lib/amd64/{cpucycles.o,libnacl.a,randombytes.o} Messenger_test.c
  *
  * 
  * Command line arguments are the ip and port of a node (for bootstrapping).
@@ -61,7 +61,7 @@ void print_request(uint8_t * public_key, uint8_t * data, uint16_t length)
     {
         return;
     }
-    if(memcmp(data ,"Install Gentoo", sizeof("Install Gentoo")) == 0 )
+    if(memcmp(data , "Install Gentoo", sizeof("Install Gentoo")) == 0 )
     //if the request contained the message of peace the person is obviously a friend so we add him.
     {
         printf("Friend request accepted.\n");
@@ -72,20 +72,18 @@ void print_request(uint8_t * public_key, uint8_t * data, uint16_t length)
 void print_message(int friendnumber, uint8_t * string, uint16_t length)
 {
     printf("Message with length %u recieved from %u: %s \n", length, friendnumber, string);
-    m_sendmessage(friendnumber, "Test1", 6);
+    m_sendmessage(friendnumber, (uint8_t*)"Test1", 6);
 }
 
 int main(int argc, char *argv[])
 {
-    if (argc < 3) {
-        printf("usage %s ip port (of the DHT bootstrap node)\n", argv[0]);
+    if (argc < 4) {
+        printf("usage %s ip port public_key (of the DHT bootstrap node)\n", argv[0]);
         exit(0);
     }
     initMessenger();
     m_callback_friendrequest(print_request);
     m_callback_friendmessage(print_message);
-    
-    m_setinfo("Install Gentoo", sizeof("Install Gentoo"));//The message we send is a message of peace
     
     printf("OUR ID: ");
     uint32_t i;
@@ -98,18 +96,21 @@ int main(int argc, char *argv[])
     
     char temp_id[128];
     printf("\nEnter the client_id of the friend you wish to add (32 bytes HEX format):\n");
-    scanf("%s", temp_id);
-    int num = m_addfriend(hex_string_to_bin(temp_id));
+    if(scanf("%s", temp_id) != 1)
+    {
+        return 1;
+    }
+    int num = m_addfriend(hex_string_to_bin(temp_id), (uint8_t*)"Install Gentoo", sizeof("Install Gentoo"));
     
     perror("Initialization");
     IP_Port bootstrap_ip_port;
     bootstrap_ip_port.port = htons(atoi(argv[2]));
     bootstrap_ip_port.ip.i = inet_addr(argv[1]);
-    DHT_bootstrap(bootstrap_ip_port);
+    DHT_bootstrap(bootstrap_ip_port, hex_string_to_bin(argv[3]));
     
     while(1)
     {
-        m_sendmessage(num, "Test", 5);
+        m_sendmessage(num, (uint8_t*)"Test", 5);
         doMessenger();
         c_sleep(30);
     }

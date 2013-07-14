@@ -2,6 +2,24 @@
 * 
 * An implementation of a simple text chat only messenger on the tox network core.
 * 
+ 
+    Copyright (C) 2013 Tox project All Rights Reserved.
+
+    This file is part of Tox.
+
+    Tox is free software: you can redistribute it and/or modify
+    it under the terms of the GNU General Public License as published by
+    the Free Software Foundation, either version 3 of the License, or
+    (at your option) any later version.
+
+    Tox is distributed in the hope that it will be useful,
+    but WITHOUT ANY WARRANTY; without even the implied warranty of
+    MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+    GNU General Public License for more details.
+
+    You should have received a copy of the GNU General Public License
+    along with Tox.  If not, see <http://www.gnu.org/licenses/>.
+    
 */
 
 #include "Messenger.h"
@@ -13,55 +31,144 @@ typedef struct
     int crypt_connection_id;
     int friend_request_id; //id of the friend request corresponding to the current friend request to the current friend.
     uint8_t status;//0 if no friend, 1 if added, 2 if friend request sent, 3 if confirmed friend, 4 if online.
+    uint8_t info[MAX_DATA_SIZE]; //the data that is sent during the friend requests we do
+    uint16_t info_size; //length of the info
     
 }Friend;
  
 
-uint8_t info[MAX_DATA_SIZE]; //the data that is sent during the friend requests we do
 
-uint16_t info_size; //length of the info
+
 
 #define MAX_NUM_FRIENDS 256
 
-Friend friendlist[MAX_NUM_FRIENDS];
+static Friend friendlist[MAX_NUM_FRIENDS];
 
-#define MAX_MESSAGE_LENGTH 256
 
-uint32_t numfriends;
+static uint32_t numfriends;
  
+
+//return the friend id associated to that public key.
+//return -1 if no such friend
+int getfriend_id(uint8_t * client_id)
+{
+    uint32_t i;
+    for(i = 0; i < numfriends; i++)
+    {
+        if(friendlist[i].status > 0)
+        {
+            if(memcmp(client_id, friendlist[i].client_id, crypto_box_PUBLICKEYBYTES) == 0)
+            {
+                return i;
+            }
+        }
+    }
+    return -1;
+}
+
+//copies the public key associated to that friend id into client_id buffer.
+//make sure that client_id is of size CLIENT_ID_SIZE.
+//returns 0 if success
+//return -1 if failure.
+int getclient_id(int friend_id, uint8_t * client_id)
+{
+    if(friend_id >= numfriends || friend_id < 0)
+    {
+        return -1;
+    }
+
+    if(friendlist[friend_id].status > 0)
+    {
+        memcpy(client_id, friendlist[friend_id].client_id, CLIENT_ID_SIZE);
+        return 0;
+    }
+    return -1;
+}
+
+
 //add a friend
-//client_id is the client i of the friend
+//set the data that will be sent along with friend request
+//client_id is the client id of the friend
+//data is the data and length is the length
 //returns the friend number if success
 //return -1 if failure.
-int m_addfriend(uint8_t * client_id)
+int m_addfriend(uint8_t * client_id, uint8_t * data, uint16_t length)
 {
-    
-    DHT_addfriend(client_id);
-    friendlist[numfriends].status = 1;
-    friendlist[numfriends].friend_request_id = -1;
-    memcpy(friendlist[numfriends].client_id, client_id, CLIENT_ID_SIZE);
-    numfriends++;
-    
-    return numfriends - 1;
+    if(length == 0 || length > MAX_DATA_SIZE - 1 - crypto_box_PUBLICKEYBYTES - crypto_box_NONCEBYTES 
+                                                      - crypto_box_BOXZEROBYTES + crypto_box_ZEROBYTES)
+    {
+        return -1;
+    }
+
+    if(getfriend_id(client_id) != -1)
+    {
+        return -1;
+    }
+    uint32_t i;
+    for(i = 0; i < (numfriends + 1); i++)
+    {
+        if(friendlist[i].status == 0)
+        {
+            DHT_addfriend(client_id);
+            friendlist[i].status = 1;
+            friendlist[i].friend_request_id = -1;
+            memcpy(friendlist[i].client_id, client_id, CLIENT_ID_SIZE);
+            
+            memcpy(friendlist[i].info, data, length);
+            friendlist[i].info_size = length;
+            
+            numfriends++;
+            return i;
+        }
+    }
+    return -1;
 }
 
 int m_addfriend_norequest(uint8_t * client_id)
 {
-    DHT_addfriend(client_id);
-    friendlist[numfriends].status = 2;
-    friendlist[numfriends].friend_request_id = -1;
-    memcpy(friendlist[numfriends].client_id, client_id, CLIENT_ID_SIZE);
-    numfriends++;
-    
-    return numfriends - 1;
+    if(getfriend_id(client_id) != -1)
+    {
+        return -1;
+    }
+    uint32_t i;
+    for(i = 0; i < (numfriends + 1); i++)
+    {
+        if(friendlist[i].status == 0)
+        {
+            DHT_addfriend(client_id);
+            friendlist[i].status = 2;
+            friendlist[i].friend_request_id = -1;
+            memcpy(friendlist[i].client_id, client_id, CLIENT_ID_SIZE);
+            numfriends++;
+            return i;
+        }
+    }
+    return -1;
 }
 
 //remove a friend
+//returns 0 if success
+//return -1 if failure.
 int m_delfriend(int friendnumber)
-{/*
-    TODO
+{
+    if(friendnumber >= numfriends || friendnumber < 0)
+    {
+        return -1;
+    }
+
     DHT_delfriend(friendlist[friendnumber].client_id);
-*/
+    crypto_kill(friendlist[friendnumber].crypt_connection_id);
+    memset(&friendlist[friendnumber], 0, sizeof(Friend));
+    uint32_t i;
+    for(i = numfriends; i != 0; i--)
+    {
+        if(friendlist[i].status != 0)
+        {
+            break;
+        }
+    }
+    numfriends = i;
+    return 0;
 }
 
 
@@ -101,21 +208,8 @@ int m_sendmessage(int friendnumber, uint8_t * message, uint32_t length)
     
 }
 
-//set the data that will be sent along with friend requests
-//return -1 if failure
-//return 0 if success
-int m_setinfo(uint8_t * data, uint16_t length)
-{
-    if(length == 0 || length > MAX_DATA_SIZE - 1 - crypto_box_PUBLICKEYBYTES - crypto_box_NONCEBYTES)
-    {
-        return -1;
-    }
-    memcpy(info, data, length);
-    info_size = length;
-    return 0;
-}
 
-void (*friend_request)(uint8_t *, uint8_t *, uint16_t);
+static void (*friend_request)(uint8_t *, uint8_t *, uint16_t);
 
 //set the function that will be executed when a friend request is received.
 void m_callback_friendrequest(void (*function)(uint8_t *, uint8_t *, uint16_t))
@@ -124,7 +218,7 @@ void m_callback_friendrequest(void (*function)(uint8_t *, uint8_t *, uint16_t))
 }
 
 
-void (*friend_message)(int, uint8_t *, uint16_t);
+static void (*friend_message)(int, uint8_t *, uint16_t);
 
 //set the function that will be executed when a message from a friend is received.
 void m_callback_friendmessage(void (*function)(int, uint8_t *, uint16_t))
@@ -142,11 +236,10 @@ void initMessenger()
     IP ip;
     ip.i = 0;
     init_networking(ip, PORT);
-    memcpy(self_client_id, self_public_key, crypto_box_PUBLICKEYBYTES);
     
 }
 
-void doFriends()
+static void doFriends()
 {//TODO: add incoming connections and some other stuff.
     uint32_t i;
     int len;
@@ -160,7 +253,8 @@ void doFriends()
              //printf("\n%u %u %u\n", friendip.ip.i, request, friendlist[i].friend_request_id);
              if(friendip.ip.i > 1 && request == -1)
              {
-                  friendlist[i].friend_request_id = send_friendrequest(friendlist[i].client_id, friendip, info, info_size);
+                  friendlist[i].friend_request_id = send_friendrequest(friendlist[i].client_id, 
+                                               friendip, friendlist[i].info, friendlist[i].info_size);
                   friendlist[i].status = 2;
              }
         }
@@ -189,7 +283,7 @@ void doFriends()
             {
                  if(temp[0] == 64)
                  {
-                     (*friend_message)(i, temp, len);
+                     (*friend_message)(i, temp + 1, len - 1);
                  }
             }
             else
@@ -205,7 +299,7 @@ void doFriends()
     }
 }
 
-void doFriendRequest()
+static void doFriendRequest()
 {
     uint8_t public_key[crypto_box_PUBLICKEYBYTES];
     uint8_t temp[MAX_DATA_SIZE];
@@ -220,25 +314,8 @@ void doFriendRequest()
 }
 
 
-//return the friend id associated to that public key.
-//return -1 if no such friend
-int getfriend_id(uint8_t * public_key)
-{
-    uint32_t i;
-    for(i = 0; i < numfriends; i++)
-    {
-        if(friendlist[i].status > 0)
-        {
-            if(memcmp(public_key, friendlist[i].client_id, crypto_box_PUBLICKEYBYTES) == 0)
-            {
-                return i;
-            }
-        }
-    }
-    return -1;
-}
 
-void doInbound()
+static void doInbound()
 {
     uint8_t secret_nonce[crypto_box_NONCEBYTES];
     uint8_t public_key[crypto_box_PUBLICKEYBYTES];
@@ -265,6 +342,7 @@ void doMessenger()
     uint32_t length;
     while(receivepacket(&ip_port, data, &length) != -1)
     {
+#ifdef DEBUG
         //if(rand() % 3 != 1)//simulate packet loss
         //{
         if(DHT_handlepacket(data, length, ip_port) && LosslessUDP_handlepacket(data, length, ip_port))
@@ -277,6 +355,11 @@ void doMessenger()
             printf("Received handled packet with length: %u\n", length);
         }
         //}
+#else
+        DHT_handlepacket(data, length, ip_port);
+        LosslessUDP_handlepacket(data, length, ip_port);
+#endif
+
     }
     doDHT();
     doLossless_UDP();
